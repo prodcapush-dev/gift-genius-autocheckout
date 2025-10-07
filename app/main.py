@@ -122,3 +122,24 @@ async def stripe_webhook(request: Request):
         # TODO: fulfill order / notify / etc.
 
     return {"received": True}
+from fastapi.responses import HTMLResponse
+
+@app.get("/thanks", response_class=HTMLResponse)
+def thanks(session_id: str | None = None):
+    return f"""
+    <html><body style="font-family:system-ui;margin:40px">
+      <h1>✅ Payment successful</h1>
+      <p>Thanks for your purchase with Gift Genius!</p>
+      {'<p>Session: ' + session_id + '</p>' if session_id else ''}
+      <p>You can return to the GPT to continue.</p>
+    </body></html>
+    """
+
+@app.get("/cancel", response_class=HTMLResponse)
+def cancel():
+    return """
+    <html><body style="font-family:system-ui;margin:40px">
+      <h1>❌ Payment canceled</h1>
+      <p>No charge was made. You can try again anytime.</p>
+    </body></html>
+    """
