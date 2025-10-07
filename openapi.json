@@ -1,19 +1,12 @@
 {
   "openapi": "3.1.0",
-  "info": {
-    "title": "Gift Genius AutoCheckout API",
-    "version": "1.0.0"
-  },
-  "servers": [
-    {
-      "url": "https://YOUR-DEPLOYED-URL"
-    }
-  ],
+  "info": { "title": "Gift Genius AutoCheckout API", "version": "1.0.0" },
+  "servers": [{ "url": "https://gift-genius-autocheckout.onrender.com" }],
   "paths": {
     "/create_checkout": {
       "post": {
         "operationId": "createCheckout",
-        "summary": "Create a Stripe Checkout session for selected product + \u20ac0.99 fee",
+        "summary": "Create a Stripe Checkout session for selected product + €0.99 fee",
         "requestBody": {
           "required": true,
           "content": {
@@ -21,39 +14,16 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "product_name": {
-                    "type": "string"
-                  },
-                  "product_price": {
-                    "type": "number"
-                  },
-                  "currency": {
-                    "type": "string",
-                    "default": "EUR"
-                  },
-                  "service_fee_cents": {
-                    "type": "integer"
-                  },
-                  "quantity": {
-                    "type": "integer",
-                    "default": 1
-                  },
-                  "success_url": {
-                    "type": "string",
-                    "default": "https://chat.openai.com/"
-                  },
-                  "cancel_url": {
-                    "type": "string",
-                    "default": "https://chat.openai.com/"
-                  },
-                  "locale": {
-                    "type": "string"
-                  }
+                  "product_name": { "type": "string" },
+                  "product_price": { "type": "number" },
+                  "currency": { "type": "string", "default": "EUR" },
+                  "service_fee_cents": { "type": "integer" },
+                  "quantity": { "type": "integer", "default": 1 },
+                  "success_url": { "type": "string", "default": "https://chat.openai.com/" },
+                  "cancel_url": { "type": "string", "default": "https://chat.openai.com/" },
+                  "locale": { "type": "string" }
                 },
-                "required": [
-                  "product_name",
-                  "product_price"
-                ]
+                "required": ["product_name", "product_price"]
               }
             }
           }
@@ -66,25 +36,25 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "checkout_url": {
-                      "type": "string"
-                    },
-                    "currency": {
-                      "type": "string"
-                    },
-                    "amount_product_cents": {
-                      "type": "integer"
-                    },
-                    "amount_service_fee_cents": {
-                      "type": "integer"
-                    },
-                    "amount_total_cents": {
-                      "type": "integer"
-                    }
+                    "checkout_url": { "type": "string", "description": "Direct Stripe URL to open" },
+                    "currency": { "type": "string" },
+                    "amount_product_cents": { "type": "integer" },
+                    "amount_service_fee_cents": { "type": "integer" },
+                    "amount_total_cents": { "type": "integer" }
                   },
-                  "required": [
-                    "checkout_url"
-                  ]
+                  "required": ["checkout_url"]
+                },
+                "examples": {
+                  "ok": {
+                    "summary": "Example",
+                    "value": {
+                      "checkout_url": "https://checkout.stripe.com/c/pay/cs_test_12345",
+                      "currency": "EUR",
+                      "amount_product_cents": 1999,
+                      "amount_service_fee_cents": 99,
+                      "amount_total_cents": 2098
+                    }
+                  }
                 }
               }
             }
