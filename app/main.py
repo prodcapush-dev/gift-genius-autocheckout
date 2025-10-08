@@ -1,5 +1,6 @@
 import os
 import html
+import logging
 from typing import Optional
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 
@@ -8,6 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field, validator
 import stripe
+
+
+# =========================
+# Logging
+# =========================
+logging.basicConfig(level=logging.INFO)
 
 
 # =========================
@@ -31,7 +38,7 @@ DEFAULT_CANCEL_URL = os.getenv(
 
 GPT_RETURN_URL = os.getenv("GPT_RETURN_URL", "https://chat.openai.com/")
 
-app = FastAPI(title="Gift Genius AutoCheckout", version="2.1.0")
+app = FastAPI(title="Gift Genius AutoCheckout", version="2.2.0")
 
 # CORS (utile pour tests/outils)
 app.add_middleware(
@@ -47,9 +54,7 @@ app.add_middleware(
 # Utils
 # =========================
 def add_params(url: str, **params) -> str:
-    """
-    Ajoute proprement des query params à une URL existante.
-    """
+    """Ajoute proprement des query params à une URL existante."""
     u = urlparse(url)
     q = dict(parse_qsl(u.query))
     for k, v in params.items():
@@ -77,7 +82,7 @@ class CreateCheckoutBody(BaseModel):
 
 
 # =========================
-# Health
+# Health / Debug
 # =========================
 @app.get("/")
 def root():
@@ -86,6 +91,20 @@ def root():
         "service": "Gift Genius AutoCheckout",
         "mode": "test" if STRIPE_SECRET_KEY.startswith("sk_test_") else "live",
     }
+
+
+@app.get("/debug")
+def debug():
+    """Petit endpoint pour confirmer le mode Stripe au runtime."""
+    try:
+        acct = stripe.Account.retrieve()
+        return {
+            "runtime_mode": "test" if STRIPE_SECRET_KEY.startswith("sk_test_") else "live",
+            "stripe_account": acct.get("id"),
+            "stripe_livemode": acct.get("livemode"),
+        }
+    except Exception as e:
+        raise HTTPException(400, f"Stripe debug failed: {e}")
 
 
 # =========================
@@ -143,12 +162,18 @@ def create_checkout(body: CreateCheckoutBody):
         if not getattr(session, "url", None):
             raise HTTPException(500, "Stripe did not return a checkout URL")
 
+        # ---- LOG RUNTIME UTILE ----
+        logging.info(
+            "[stripe] session_id=%s livemode=%s url_has_hash=%s",
+            session.id, session.livemode, ("#" in (session.url or ""))
+        )
+
     except stripe.error.StripeError as e:
         raise HTTPException(400, f"Stripe error: {str(e)}")
 
     total_cents = amount_products_cents + fee_cents
     return {
-        "checkout_url": session.url,                      # URL Stripe (peut contenir un #…)
+        "checkout_url": session.url,   # URL Stripe (peut contenir un #…)
         "redirect_url": f"https://gift-genius-autocheckout.onrender.com/r/{session.id}",  # URL courte sans #
         "currency": body.currency,
         "amount_product_cents": amount_products_cents,
@@ -162,10 +187,7 @@ def create_checkout(body: CreateCheckoutBody):
 # =========================
 @app.get("/r/{session_id}")
 def redirect_to_stripe(session_id: str):
-    """
-    Redirige vers l'URL Stripe complète de la session.
-    Utile quand l'interface de chat tronque tout ce qui suit le '#'.
-    """
+    """Redirige vers l'URL Stripe complète de la session (évite la troncature du #…)."""
     try:
         sess = stripe.checkout.Session.retrieve(session_id)
         url = getattr(sess, "url", None)
