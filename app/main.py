@@ -5,7 +5,7 @@ from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field, validator
 import stripe
 
@@ -31,9 +31,9 @@ DEFAULT_CANCEL_URL = os.getenv(
 
 GPT_RETURN_URL = os.getenv("GPT_RETURN_URL", "https://chat.openai.com/")
 
-app = FastAPI(title="Gift Genius AutoCheckout", version="2.0.0")
+app = FastAPI(title="Gift Genius AutoCheckout", version="2.1.0")
 
-# CORS (utile pour tests/outils; sans danger ici)
+# CORS (utile pour tests/outils)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,7 +49,6 @@ app.add_middleware(
 def add_params(url: str, **params) -> str:
     """
     Ajoute proprement des query params à une URL existante.
-    (évite les erreurs de type '?param?...' au lieu de '&')
     """
     u = urlparse(url)
     q = dict(parse_qsl(u.query))
@@ -145,17 +144,36 @@ def create_checkout(body: CreateCheckoutBody):
             raise HTTPException(500, "Stripe did not return a checkout URL")
 
     except stripe.error.StripeError as e:
-        # renvoyer message lisible coté client
         raise HTTPException(400, f"Stripe error: {str(e)}")
 
     total_cents = amount_products_cents + fee_cents
     return {
-        "checkout_url": session.url,   # à afficher tel quel côté GPT
+        "checkout_url": session.url,                      # URL Stripe (peut contenir un #…)
+        "redirect_url": f"https://gift-genius-autocheckout.onrender.com/r/{session.id}",  # URL courte sans #
         "currency": body.currency,
         "amount_product_cents": amount_products_cents,
         "amount_service_fee_cents": fee_cents,
         "amount_total_cents": total_cents,
     }
+
+
+# =========================
+# Safe Redirect (no hash in chat)
+# =========================
+@app.get("/r/{session_id}")
+def redirect_to_stripe(session_id: str):
+    """
+    Redirige vers l'URL Stripe complète de la session.
+    Utile quand l'interface de chat tronque tout ce qui suit le '#'.
+    """
+    try:
+        sess = stripe.checkout.Session.retrieve(session_id)
+        url = getattr(sess, "url", None)
+        if not url:
+            raise HTTPException(404, "Checkout session has no URL")
+        return RedirectResponse(url, status_code=302)
+    except stripe.error.StripeError as e:
+        raise HTTPException(400, f"Stripe error: {str(e)}")
 
 
 # =========================
