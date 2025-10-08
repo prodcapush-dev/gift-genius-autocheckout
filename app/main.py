@@ -10,12 +10,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field, validator
 import stripe
 
-
 # =========================
 # Logging
 # =========================
 logging.basicConfig(level=logging.INFO)
-
 
 # =========================
 # Environment & Defaults
@@ -25,7 +23,7 @@ if not STRIPE_SECRET_KEY:
     raise RuntimeError("Missing STRIPE_SECRET_KEY environment variable")
 stripe.api_key = STRIPE_SECRET_KEY
 
-SERVICE_FEE_CENTS = int(os.getenv("SERVICE_FEE_CENTS", "99"))  # €0.99 by default
+SERVICE_FEE_CENTS = int(os.getenv("SERVICE_FEE_CENTS", "99"))  # €0.99 default
 
 DEFAULT_SUCCESS_URL = os.getenv(
     "SUCCESS_URL",
@@ -38,9 +36,9 @@ DEFAULT_CANCEL_URL = os.getenv(
 
 GPT_RETURN_URL = os.getenv("GPT_RETURN_URL", "https://chat.openai.com/")
 
-app = FastAPI(title="Gift Genius AutoCheckout", version="2.2.0")
+app = FastAPI(title="Gift Genius AutoCheckout", version="2.3.0")
 
-# CORS (utile pour tests/outils)
+# CORS (handy for tests/tools)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,19 +47,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # =========================
 # Utils
 # =========================
 def add_params(url: str, **params) -> str:
-    """Ajoute proprement des query params à une URL existante."""
+    """Safely add query params to an URL (handles ? vs &)."""
     u = urlparse(url)
     q = dict(parse_qsl(u.query))
     for k, v in params.items():
         if v is not None:
             q[k] = v
     return urlunparse(u._replace(query=urlencode(q)))
-
 
 # =========================
 # Models
@@ -80,7 +76,6 @@ class CreateCheckoutBody(BaseModel):
     def currency_upper(cls, v: str) -> str:
         return v.upper().strip()
 
-
 # =========================
 # Health / Debug
 # =========================
@@ -92,10 +87,9 @@ def root():
         "mode": "test" if STRIPE_SECRET_KEY.startswith("sk_test_") else "live",
     }
 
-
 @app.get("/debug")
 def debug():
-    """Petit endpoint pour confirmer le mode Stripe au runtime."""
+    """Quick endpoint to confirm Stripe mode at runtime."""
     try:
         acct = stripe.Account.retrieve()
         return {
@@ -106,15 +100,14 @@ def debug():
     except Exception as e:
         raise HTTPException(400, f"Stripe debug failed: {e}")
 
-
 # =========================
 # Create Checkout
 # =========================
 @app.post("/create_checkout")
 def create_checkout(body: CreateCheckoutBody):
-    # montant produit en centimes
+    # Amounts in minor units (cents)
     try:
-        amount_product_cents_single = int(round(body.product_price * 100))
+        unit_amount = int(round(body.product_price * 100))
     except Exception:
         raise HTTPException(400, "Invalid product_price format")
 
@@ -122,25 +115,24 @@ def create_checkout(body: CreateCheckoutBody):
         raise HTTPException(400, "service_fee_cents must be >= 0")
 
     fee_cents = SERVICE_FEE_CENTS if body.service_fee_cents is None else body.service_fee_cents
-    amount_products_cents = amount_product_cents_single * body.quantity
+    products_total = unit_amount * body.quantity
 
-    # URLs de redirection (propres, avec params ajoutés correctement)
+    # Clean redirect URLs
     success_base = body.success_url or DEFAULT_SUCCESS_URL
     cancel_base = body.cancel_url or DEFAULT_CANCEL_URL
-
     success_url = add_params(success_base, session_id="{CHECKOUT_SESSION_ID}", status="success")
     cancel_url = add_params(cancel_base, status="cancel")
 
     try:
         session = stripe.checkout.Session.create(
             mode="payment",
-            ui_mode="hosted",  # indispensable pour obtenir une URL hébergée
+            ui_mode="hosted",
             line_items=[
                 {
                     "price_data": {
                         "currency": body.currency,
                         "product_data": {"name": body.product_name},
-                        "unit_amount": amount_product_cents_single,
+                        "unit_amount": unit_amount,
                     },
                     "quantity": body.quantity,
                 },
@@ -162,7 +154,6 @@ def create_checkout(body: CreateCheckoutBody):
         if not getattr(session, "url", None):
             raise HTTPException(500, "Stripe did not return a checkout URL")
 
-        # ---- LOG RUNTIME UTILE ----
         logging.info(
             "[stripe] session_id=%s livemode=%s url_has_hash=%s",
             session.id, session.livemode, ("#" in (session.url or ""))
@@ -171,23 +162,21 @@ def create_checkout(body: CreateCheckoutBody):
     except stripe.error.StripeError as e:
         raise HTTPException(400, f"Stripe error: {str(e)}")
 
-    total_cents = amount_products_cents + fee_cents
     return {
-        "checkout_url": session.url,   # URL Stripe (peut contenir un #…)
-        "redirect_url": f"https://gift-genius-autocheckout.onrender.com/r/{session.id}",  # URL courte sans #
+        "checkout_url": session.url,   # may include a # fragment
+        "redirect_url": f"https://gift-genius-autocheckout.onrender.com/r/{session.id}",  # no hash; safe for chat
         "currency": body.currency,
-        "amount_product_cents": amount_products_cents,
+        "amount_product_cents": products_total,
         "amount_service_fee_cents": fee_cents,
-        "amount_total_cents": total_cents,
+        "amount_total_cents": products_total + fee_cents,
     }
 
-
 # =========================
-# Safe Redirect (no hash in chat)
+# Safe Redirect
 # =========================
 @app.get("/r/{session_id}")
 def redirect_to_stripe(session_id: str):
-    """Redirige vers l'URL Stripe complète de la session (évite la troncature du #…)."""
+    """Redirects to the full Stripe Checkout URL (prevents hash truncation in chat UIs)."""
     try:
         sess = stripe.checkout.Session.retrieve(session_id)
         url = getattr(sess, "url", None)
@@ -197,18 +186,29 @@ def redirect_to_stripe(session_id: str):
     except stripe.error.StripeError as e:
         raise HTTPException(400, f"Stripe error: {str(e)}")
 
-
 # =========================
 # Thank you & Cancel pages
 # =========================
 @app.get("/thanks", response_class=HTMLResponse)
 def thanks(session_id: Optional[str] = None, status: Optional[str] = None):
-    # Optionnel : afficher un récap de la session
+    """
+    Friendly thank-you page.
+    Guard: don't call Stripe if 'session_id' contains the placeholder
+    (e.g., {CHECKOUT_SESSION_ID}) or is missing.
+    """
+    invalid = (
+        not session_id or
+        "CHECKOUT_SESSION_ID" in session_id or
+        "{" in session_id or
+        "}" in session_id
+    )
+
     amount_total = None
     currency = None
     items_html = ""
     email = None
-    if session_id:
+
+    if not invalid:
         try:
             sess = stripe.checkout.Session.retrieve(
                 session_id,
@@ -259,7 +259,6 @@ def thanks(session_id: Optional[str] = None, status: Optional[str] = None):
     </body></html>
     """
 
-
 @app.get("/cancel", response_class=HTMLResponse)
 def cancel(status: Optional[str] = None):
     return f"""
@@ -282,7 +281,6 @@ def cancel(status: Optional[str] = None):
       </div>
     </body></html>
     """
-
 
 # =========================
 # Webhook (optional)
